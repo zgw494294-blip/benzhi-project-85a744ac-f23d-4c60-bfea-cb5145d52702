@@ -10,10 +10,12 @@ import (
 )
 
 type Service struct {
-	repo                 Repository
-	audit                Auditor
-	now                  func() time.Time
-	mu                   sync.Mutex
+	repo  Repository
+	audit Auditor
+	now   func() time.Time
+	mu    sync.Mutex
+
+	credentialCacheMu    sync.RWMutex
 	credentialCacheID    string
 	credentialCachePlan  *RigPlan
 	credentialCacheValue ClearanceCredential
@@ -156,15 +158,23 @@ func (s *Service) VerifyCredentialGlobally(ctx context.Context, credentialID, di
 }
 
 func (s *Service) findCredential(ctx context.Context, credentialID string) (*RigPlan, ClearanceCredential, error) {
+	s.credentialCacheMu.RLock()
 	if s.credentialCacheID == credentialID && s.credentialCachePlan != nil {
-		return clonePlan(s.credentialCachePlan), s.credentialCacheValue, nil
+		plan, credential := clonePlan(s.credentialCachePlan), s.credentialCacheValue
+		s.credentialCacheMu.RUnlock()
+		return plan, credential, nil
 	}
+	s.credentialCacheMu.RUnlock()
+
 	p, credential, err := s.repo.FindCredential(ctx, credentialID)
 	if err != nil {
 		return nil, ClearanceCredential{}, err
 	}
+	planSnapshot, valueSnapshot := clonePlan(p), credential
+	s.credentialCacheMu.Lock()
 	s.credentialCacheID = credentialID
-	s.credentialCachePlan = clonePlan(p)
-	s.credentialCacheValue = credential
+	s.credentialCachePlan = planSnapshot
+	s.credentialCacheValue = valueSnapshot
+	s.credentialCacheMu.Unlock()
 	return p, credential, nil
 }
