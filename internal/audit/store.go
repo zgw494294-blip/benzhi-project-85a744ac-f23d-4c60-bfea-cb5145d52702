@@ -85,7 +85,7 @@ func (s *Store) appendLocked(planID, action, actor string, payload map[string]an
 	}
 	record := rigging.AuditRecord{
 		Sequence: uint64(len(s.records) + 1), PlanID: planID, Action: action, Actor: actor,
-		At: s.now(), Payload: payload, PreviousDigest: previous,
+		At: s.now(), Payload: clonePayload(payload), PreviousDigest: previous,
 	}
 	digest, err := auditDigest(record)
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *Store) appendLocked(planID, action, actor string, payload map[string]an
 		return rigging.AuditRecord{}, err
 	}
 	s.records = append(s.records, record)
-	return record, nil
+	return cloneRecord(record), nil
 }
 
 func (s *Store) Issue(_ context.Context, planID, frozenDigest, issuedBy string) (rigging.ClearanceCredential, error) {
@@ -136,7 +136,7 @@ func (s *Store) Timeline(_ context.Context, planID string) ([]rigging.AuditRecor
 	result := make([]rigging.AuditRecord, 0)
 	for _, record := range s.records {
 		if record.PlanID == planID {
-			result = append(result, record)
+			result = append(result, cloneRecord(record))
 		}
 	}
 	return result, verification, nil
@@ -243,3 +243,40 @@ func (s *Store) loadCredentials(path string) error {
 }
 
 var _ rigging.Auditor = (*Store)(nil)
+
+// clonePayload returns a deep copy of payload so that callers cannot mutate the
+// audit store's in-memory copy by holding onto the map they passed in. A nil
+// payload is preserved as nil to keep the persisted representation faithful.
+func clonePayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	var copy map[string]any
+	if err := json.Unmarshal(jsonPayload(payload), &copy); err != nil {
+		// Falling back to a shallow copy still breaks direct aliasing while
+		// keeping the store usable; malformed payloads are rejected earlier.
+		fallback := make(map[string]any, len(payload))
+		for k, v := range payload {
+			fallback[k] = v
+		}
+		return fallback
+	}
+	return copy
+}
+
+// cloneRecord returns a deep copy of record whose Payload map is independent
+// from the store's in-memory copy, so mutating a record handed back by
+// Timeline cannot corrupt the stored audit chain.
+func cloneRecord(record rigging.AuditRecord) rigging.AuditRecord {
+	copy := record
+	copy.Payload = clonePayload(record.Payload)
+	return copy
+}
+
+func jsonPayload(value any) []byte {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return b
+}
