@@ -68,10 +68,32 @@ func (s *Service) IssueCredential(ctx context.Context, planID string, expected i
 	if clean(issuedBy) == "" {
 		return nil, Invalid("issuedBy", "签发人不能为空")
 	}
-	credential, err := s.audit.Issue(ctx, p.ID, p.FrozenDigest, clean(issuedBy))
+	// Prepare the credential without persisting it so a domain commit failure
+	// cannot leak a credential record, consume the global sequence or leave a
+	// credential.sealed audit fact behind.
+	credential, err := s.audit.Prepare(ctx, p.ID, p.FrozenDigest, clean(issuedBy))
 	if err != nil {
 		return nil, err
 	}
 	p.Credentials = append(p.Credentials, credential)
-	return s.commit(ctx, p, expected, "credential.issued", clean(issuedBy), key, credential.ID, request, map[string]any{"credentialId": credential.ID, "sequence": credential.Sequence, "credentialDigest": credential.CredentialDigest})
+	actor := clean(issuedBy)
+	payload := map[string]any{"credentialId": credential.ID, "sequence": credential.Sequence, "credentialDigest": credential.CredentialDigest}
+	refreshTestConfiguration(p)
+	p.Version = expected + 1
+	receiptValue := CommandReceipt{PlanID: p.ID, Version: p.Version, ResourceID: credential.ID, Action: "credential.issued", RequestDigest: requestDigest(request)}
+	if err := s.repo.Commit(ctx, p, expected, []DomainEvent{{Type: "credential.issued", Actor: actor, Payload: payload}}, key, "credential.issued", receiptValue); err != nil {
+		return nil, err
+	}
+	// The domain accepted the credential: now durably seal it and append the
+	// credential.sealed audit fact, followed by the credential.issued audit
+	// mirror, preserving the audit timeline ordering.
+	if _, err := s.audit.Seal(ctx, credential); err != nil {
+		return nil, fmt.Errorf("seal credential: %w", err)
+	}
+	if s.audit != nil {
+		if _, err := s.audit.Append(ctx, p.ID, "credential.issued", actor, payload); err != nil {
+			return nil, fmt.Errorf("append audit: %w", err)
+		}
+	}
+	return clonePlan(p), nil
 }

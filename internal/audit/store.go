@@ -102,9 +102,41 @@ func (s *Store) appendLocked(planID, action, actor string, payload map[string]an
 	return record, nil
 }
 
-func (s *Store) Issue(_ context.Context, planID, frozenDigest, issuedBy string) (rigging.ClearanceCredential, error) {
+func (s *Store) Issue(ctx context.Context, planID, frozenDigest, issuedBy string) (rigging.ClearanceCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	credential, err := s.prepareLocked(planID, frozenDigest, issuedBy)
+	if err != nil {
+		return rigging.ClearanceCredential{}, err
+	}
+	if _, err := s.sealLocked(credential); err != nil {
+		return rigging.ClearanceCredential{}, err
+	}
+	return credential, nil
+}
+
+// Prepare computes the next clearance credential, including its sequence and
+// digest, without persisting anything. The caller can stage the domain commit
+// first and only call Seal once the domain has accepted the credential, so a
+// domain commit failure leaves no credential frame, no consumed sequence and
+// no audit fact behind.
+func (s *Store) Prepare(_ context.Context, planID, frozenDigest, issuedBy string) (rigging.ClearanceCredential, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.prepareLocked(planID, frozenDigest, issuedBy)
+}
+
+// Seal durably appends a previously prepared credential and the matching
+// credential.sealed audit fact. It verifies that the credential's sequence is
+// still the next one to seal, which keeps the global sequence contiguous when
+// the caller holds the issuing command lock between Prepare and Seal.
+func (s *Store) Seal(_ context.Context, credential rigging.ClearanceCredential) (rigging.AuditRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sealLocked(credential)
+}
+
+func (s *Store) prepareLocked(planID, frozenDigest, issuedBy string) (rigging.ClearanceCredential, error) {
 	if s.credentialFile == nil {
 		return rigging.ClearanceCredential{}, errors.New("audit store is closed")
 	}
@@ -117,16 +149,32 @@ func (s *Store) Issue(_ context.Context, planID, frozenDigest, issuedBy string) 
 		return rigging.ClearanceCredential{}, err
 	}
 	credential.CredentialDigest = digest
+	return credential, nil
+}
+
+func (s *Store) sealLocked(credential rigging.ClearanceCredential) (rigging.AuditRecord, error) {
+	if s.credentialFile == nil {
+		return rigging.AuditRecord{}, errors.New("audit store is closed")
+	}
+	if credential.Sequence != s.credentialSequence+1 {
+		return rigging.AuditRecord{}, fmt.Errorf("credential sequence stale: got %d want %d", credential.Sequence, s.credentialSequence+1)
+	}
+	digest, err := credentialDigest(credential)
+	if err != nil {
+		return rigging.AuditRecord{}, err
+	}
+	if digest != credential.CredentialDigest {
+		return rigging.AuditRecord{}, fmt.Errorf("credential digest mismatch during seal")
+	}
 	if err := writeFrame(s.credentialFile, credential); err != nil {
-		return rigging.ClearanceCredential{}, err
+		return rigging.AuditRecord{}, err
 	}
 	if err := s.credentialFile.Sync(); err != nil {
-		return rigging.ClearanceCredential{}, err
+		return rigging.AuditRecord{}, err
 	}
 	s.credentialSequence = credential.Sequence
 	s.credentials[credential.ID] = credential
-	_, err = s.appendLocked(planID, "credential.sealed", issuedBy, map[string]any{"credentialId": credential.ID, "sequence": credential.Sequence, "frozenDigest": frozenDigest, "credentialDigest": digest})
-	return credential, err
+	return s.appendLocked(credential.PlanID, "credential.sealed", credential.IssuedBy, map[string]any{"credentialId": credential.ID, "sequence": credential.Sequence, "frozenDigest": credential.FrozenDigest, "credentialDigest": digest})
 }
 
 func (s *Store) Timeline(_ context.Context, planID string) ([]rigging.AuditRecord, rigging.Verification, error) {

@@ -29,6 +29,7 @@ type Repository interface {
 type Auditor interface {
 	Append(context.Context, string, string, string, map[string]any) (AuditRecord, error)
 	Timeline(context.Context, string) ([]AuditRecord, Verification, error)
-	Issue(context.Context, string, string, string) (ClearanceCredential, error)
+	Prepare(context.Context, string, string, string) (ClearanceCredential, error)
+	Seal(context.Context, ClearanceCredential) (AuditRecord, error)
 	VerifyCredential(context.Context, ClearanceCredential) (Verification, error)
 }
