@@ -55,13 +55,24 @@ func (s *Service) commit(ctx context.Context, p *RigPlan, expected int64, action
 	p.Version = expected + 1
 	receipt := CommandReceipt{PlanID: p.ID, Version: p.Version, ResourceID: resourceID, Action: action, RequestDigest: requestDigest(request)}
 	event := DomainEvent{Type: action, Actor: actor, Payload: payload}
-	if err := s.repo.Commit(ctx, p, expected, []DomainEvent{event}, key, action, receipt); err != nil {
-		return nil, err
-	}
+	// Append the audit fact before persisting the domain event and idempotency receipt.
+	// This keeps the audit chain, the domain event log and the idempotency receipt
+	// consistent: an audit storage failure must never leave a committed domain change
+	// that is then re-exposed on retry via the idempotency receipt.
 	if s.audit != nil {
 		if _, err := s.audit.Append(ctx, p.ID, action, actor, payload); err != nil {
+			// Roll back the in-memory aggregate mutation so a retry starts fresh.
+			p.Version = expected
 			return nil, fmt.Errorf("append audit: %w", err)
 		}
+	}
+	if err := s.repo.Commit(ctx, p, expected, []DomainEvent{event}, key, action, receipt); err != nil {
+		// The audit fact was already persisted, but the domain change failed. Surface a
+		// distinct error so the caller knows the command did not complete; the idempotency
+		// receipt was not stored, so a retry will re-run the command rather than return the
+		// half-committed audit-only result.
+		p.Version = expected
+		return nil, fmt.Errorf("commit domain after audit: %w", err)
 	}
 	return clonePlan(p), nil
 }

@@ -2,6 +2,7 @@ package rigging
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -28,13 +29,16 @@ func (s *Service) CreatePlan(ctx context.Context, r CreatePlanRequest, key strin
 	}
 	receipt := CommandReceipt{PlanID: p.ID, Version: 1, ResourceID: p.ID, Action: "plan.created", RequestDigest: requestDigest(r)}
 	payload := map[string]any{"venueName": p.VenueName, "performanceDate": p.PerformanceDate, "ratedTotalLoadKg": p.RatedTotalLoadKg}
-	if err := s.repo.Commit(ctx, p, 0, []DomainEvent{{Type: "plan.created", Actor: p.OwnerName, Payload: payload}}, key, "plan.created", receipt); err != nil {
-		return nil, err
-	}
+	// Append the audit fact before persisting the domain event and idempotency receipt,
+	// so an audit storage failure never leaves a committed (but audit-less) plan that a
+	// retry with the same idempotency key would re-expose as already committed.
 	if s.audit != nil {
 		if _, err := s.audit.Append(ctx, p.ID, "plan.created", p.OwnerName, payload); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("append audit: %w", err)
 		}
+	}
+	if err := s.repo.Commit(ctx, p, 0, []DomainEvent{{Type: "plan.created", Actor: p.OwnerName, Payload: payload}}, key, "plan.created", receipt); err != nil {
+		return nil, fmt.Errorf("commit domain after audit: %w", err)
 	}
 	return clonePlan(p), nil
 }

@@ -153,13 +153,16 @@ func (s *Service) RecordTestBatch(ctx context.Context, planID string, expected i
 	p.Version = expected + 1
 	receiptValue := CommandReceipt{PlanID: p.ID, Version: p.Version, ResourceID: batchID, ResourceIDs: ids, BatchID: batchID, Action: "tests.batch_recorded", RequestDigest: requestDigest(r)}
 	payload := map[string]any{"batchId": batchID, "pointCount": len(ids), "testIds": ids, "result": "archived"}
-	if err := s.repo.Commit(ctx, p, expected, []DomainEvent{{Type: "tests.batch_recorded", Actor: r.Tests[0].PerformedBy, Payload: payload}}, key, "tests.batch_recorded", receiptValue); err != nil {
-		return nil, err
-	}
+	// Append the audit fact before persisting the domain event and idempotency receipt,
+	// mirroring the single-command path: an audit failure must not leave a committed
+	// batch that a retry would re-expose as already recorded.
 	if s.audit != nil {
 		if _, err := s.audit.Append(ctx, p.ID, "tests.batch_recorded", r.Tests[0].PerformedBy, payload); err != nil {
 			return nil, fmt.Errorf("append audit: %w", err)
 		}
+	}
+	if err := s.repo.Commit(ctx, p, expected, []DomainEvent{{Type: "tests.batch_recorded", Actor: r.Tests[0].PerformedBy, Payload: payload}}, key, "tests.batch_recorded", receiptValue); err != nil {
+		return nil, fmt.Errorf("commit domain after audit: %w", err)
 	}
 	return batchResult(p, batchID, ids), nil
 }
