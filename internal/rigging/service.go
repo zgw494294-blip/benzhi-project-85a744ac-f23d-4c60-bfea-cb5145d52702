@@ -11,12 +11,13 @@ import (
 )
 
 type Service struct {
-	repo          Repository
-	audit         Auditor
-	now           func() time.Time
-	mu            sync.Mutex
-	timelineMu    sync.RWMutex
-	timelineCache map[string]timelineCacheEntry
+	repo             Repository
+	audit            Auditor
+	now              func() time.Time
+	mu               sync.Mutex
+	timelineMu       sync.Mutex
+	timelineCache    map[string]timelineCacheEntry
+	timelineVersions map[string]uint64
 }
 
 type timelineCacheEntry struct {
@@ -27,7 +28,8 @@ type timelineCacheEntry struct {
 func NewService(repo Repository, audit Auditor) *Service {
 	return &Service{
 		repo: repo, audit: audit, now: func() time.Time { return time.Now().UTC() },
-		timelineCache: make(map[string]timelineCacheEntry),
+		timelineCache:    make(map[string]timelineCacheEntry),
+		timelineVersions: make(map[string]uint64),
 	}
 }
 
@@ -74,7 +76,20 @@ func (s *Service) commit(ctx context.Context, p *RigPlan, expected int64, action
 			return nil, fmt.Errorf("append audit: %w", err)
 		}
 	}
+	s.invalidateTimeline(p.ID)
 	return clonePlan(p), nil
+}
+
+// invalidateTimeline drops the cached audit timeline for a plan after any audit
+// append succeeds. It must be called while the originating write still holds
+// s.mu so that the generation bump is observed by Timeline reads that race with
+// the append: a read that snapshotted a stale timeline before the append will
+// either see the bumped generation (and reload) or have its own store rejected.
+func (s *Service) invalidateTimeline(planID string) {
+	s.timelineMu.Lock()
+	defer s.timelineMu.Unlock()
+	s.timelineVersions[planID]++
+	delete(s.timelineCache, planID)
 }
 
 func (s *Service) idempotentResult(ctx context.Context, receipt *CommandReceipt) (*RigPlan, error) {
@@ -95,20 +110,49 @@ func (s *Service) Timeline(ctx context.Context, planID string) ([]AuditRecord, V
 	if _, err := s.repo.Get(ctx, planID); err != nil {
 		return nil, Verification{}, err
 	}
-	s.timelineMu.RLock()
-	entry, ok := s.timelineCache[planID]
-	s.timelineMu.RUnlock()
-	if ok {
+	// Capture the generation before reading anything. A write that appends to
+	// the audit timeline bumps this generation, so any snapshot taken against
+	// an older generation must not be allowed to repopulate the cache after a
+	// concurrent append completes.
+	generation := s.timelineGeneration(planID)
+	if entry, ok := s.timelineEntry(planID, generation); ok {
 		return cloneAuditRecords(entry.records), entry.verification, nil
 	}
 	records, verification, err := s.audit.Timeline(ctx, planID)
 	if err != nil {
 		return nil, Verification{}, err
 	}
-	s.timelineMu.Lock()
-	s.timelineCache[planID] = timelineCacheEntry{records: cloneAuditRecords(records), verification: verification}
-	s.timelineMu.Unlock()
+	// Only store the freshly loaded snapshot when no audit append for this plan
+	// completed while the load was in flight. If the generation advanced, the
+	// stale snapshot is discarded and the next reader will reload from the audit
+	// store, which already reflects every committed append.
+	s.storeTimelineEntry(planID, generation, timelineCacheEntry{records: cloneAuditRecords(records), verification: verification})
 	return records, verification, nil
+}
+
+func (s *Service) timelineGeneration(planID string) uint64 {
+	s.timelineMu.Lock()
+	defer s.timelineMu.Unlock()
+	return s.timelineVersions[planID]
+}
+
+func (s *Service) timelineEntry(planID string, generation uint64) (timelineCacheEntry, bool) {
+	s.timelineMu.Lock()
+	defer s.timelineMu.Unlock()
+	entry, ok := s.timelineCache[planID]
+	if !ok || s.timelineVersions[planID] != generation {
+		return timelineCacheEntry{}, false
+	}
+	return entry, true
+}
+
+func (s *Service) storeTimelineEntry(planID string, generation uint64, entry timelineCacheEntry) {
+	s.timelineMu.Lock()
+	defer s.timelineMu.Unlock()
+	if s.timelineVersions[planID] != generation {
+		return
+	}
+	s.timelineCache[planID] = entry
 }
 
 func cloneAuditRecords(records []AuditRecord) []AuditRecord {

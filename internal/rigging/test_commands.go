@@ -161,6 +161,7 @@ func (s *Service) RecordTestBatch(ctx context.Context, planID string, expected i
 			return nil, fmt.Errorf("append audit: %w", err)
 		}
 	}
+	s.invalidateTimeline(p.ID)
 	return batchResult(p, batchID, ids), nil
 }
 

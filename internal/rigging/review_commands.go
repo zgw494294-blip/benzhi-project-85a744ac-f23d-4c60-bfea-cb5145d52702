@@ -72,6 +72,7 @@ func (s *Service) IssueCredential(ctx context.Context, planID string, expected i
 	if err != nil {
 		return nil, err
 	}
+	s.invalidateTimeline(p.ID)
 	p.Credentials = append(p.Credentials, credential)
 	return s.commit(ctx, p, expected, "credential.issued", clean(issuedBy), key, credential.ID, request, map[string]any{"credentialId": credential.ID, "sequence": credential.Sequence, "credentialDigest": credential.CredentialDigest})
 }

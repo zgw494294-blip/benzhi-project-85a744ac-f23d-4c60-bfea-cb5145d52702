@@ -36,6 +36,7 @@ func (s *Service) CreatePlan(ctx context.Context, r CreatePlanRequest, key strin
 			return nil, err
 		}
 	}
+	s.invalidateTimeline(p.ID)
 	return clonePlan(p), nil
 }
 
