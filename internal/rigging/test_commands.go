@@ -153,30 +153,18 @@ func (s *Service) RecordTestBatch(ctx context.Context, planID string, expected i
 	p.Version = expected + 1
 	receiptValue := CommandReceipt{PlanID: p.ID, Version: p.Version, ResourceID: batchID, ResourceIDs: ids, BatchID: batchID, Action: "tests.batch_recorded", RequestDigest: requestDigest(r)}
 	payload := map[string]any{"batchId": batchID, "pointCount": len(ids), "testIds": ids, "result": "archived"}
-	commitDone := make(chan error, 1)
-	go func() {
-		commitContext := context.WithoutCancel(ctx)
-		if err := s.repo.Commit(commitContext, p, expected, []DomainEvent{{Type: "tests.batch_recorded", Actor: r.Tests[0].PerformedBy, Payload: payload}}, key, "tests.batch_recorded", receiptValue); err != nil {
-			commitDone <- err
-			return
-		}
-		if s.audit != nil {
-			if _, err := s.audit.Append(commitContext, p.ID, "tests.batch_recorded", r.Tests[0].PerformedBy, payload); err != nil {
-				commitDone <- fmt.Errorf("append audit: %w", err)
-				return
-			}
-		}
-		commitDone <- nil
-	}()
-	select {
-	case err := <-commitDone:
-		if err != nil {
-			return nil, err
-		}
-		return batchResult(p, batchID, ids), nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	if err := s.repo.Commit(ctx, p, expected, []DomainEvent{{Type: "tests.batch_recorded", Actor: r.Tests[0].PerformedBy, Payload: payload}}, key, "tests.batch_recorded", receiptValue); err != nil {
+		return nil, err
+	}
+	if s.audit != nil {
+		if _, err := s.audit.Append(ctx, p.ID, "tests.batch_recorded", r.Tests[0].PerformedBy, payload); err != nil {
+			return nil, fmt.Errorf("append audit: %w", err)
+		}
+	}
+	return batchResult(p, batchID, ids), nil
 }
 
 func newLoadTest(p *RigPlan, point SuspensionPoint, r RecordTestRequest, now time.Time) LoadTest {
