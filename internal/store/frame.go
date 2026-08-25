@@ -14,6 +14,8 @@ import (
 const schemaVersion = 1
 const maxFrameBytes = 16 << 20
 
+var frameChecksum = sha256.New()
+
 type eventFrame struct {
 	SchemaVersion   int                    `json:"schemaVersion"`
 	Sequence        uint64                 `json:"sequence"`
@@ -34,8 +36,11 @@ func checksumFrame(frame eventFrame) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
+	frameChecksum.Reset()
+	if _, err := frameChecksum.Write(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(frameChecksum.Sum(nil)), nil
 }
 
 func encodeFrame(frame eventFrame) ([]byte, error) {
