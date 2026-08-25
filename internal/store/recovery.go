@@ -52,6 +52,9 @@ func (r *Repository) recover() error {
 	if err := validateSnapshot(r.snapshotPath, sequence); err != nil {
 		return err
 	}
+	if err := r.restoreSnapshot(); err != nil {
+		return err
+	}
 	if err := validateRecoveredState(r.plans, r.commands); err != nil {
 		return fmt.Errorf("validate recovered projection: %w", err)
 	}

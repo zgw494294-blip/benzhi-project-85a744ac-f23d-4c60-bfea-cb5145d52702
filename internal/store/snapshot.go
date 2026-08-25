@@ -102,3 +102,20 @@ func validateSnapshot(path string, expectedSequence uint64) error {
 	}
 	return nil
 }
+
+func (r *Repository) restoreSnapshot() error {
+	b, err := os.ReadFile(r.snapshotPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var snapshot projectionSnapshot
+	if err := json.Unmarshal(b, &snapshot); err != nil {
+		return fmt.Errorf("decode projection snapshot for restore: %w", err)
+	}
+	r.plans = snapshot.Plans
+	r.commands = snapshot.Commands
+	return nil
+}
