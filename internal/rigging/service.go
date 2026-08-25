@@ -10,10 +10,13 @@ import (
 )
 
 type Service struct {
-	repo  Repository
-	audit Auditor
-	now   func() time.Time
-	mu    sync.Mutex
+	repo                 Repository
+	audit                Auditor
+	now                  func() time.Time
+	mu                   sync.Mutex
+	credentialCacheID    string
+	credentialCachePlan  *RigPlan
+	credentialCacheValue ClearanceCredential
 }
 
 func NewService(repo Repository, audit Auditor) *Service {
@@ -118,7 +121,7 @@ func (s *Service) VerifyCredentialGlobally(ctx context.Context, credentialID, di
 			return GlobalCredentialVerification{}, Invalid("digest", "凭据摘要必须为完整的 64 位十六进制值")
 		}
 	}
-	p, credential, err := s.repo.FindCredential(ctx, credentialID)
+	p, credential, err := s.findCredential(ctx, credentialID)
 	if err != nil {
 		return GlobalCredentialVerification{}, err
 	}
@@ -150,4 +153,18 @@ func (s *Service) VerifyCredentialGlobally(ctx context.Context, credentialID, di
 		result.Message = "凭据存在，但完整性核验未通过"
 	}
 	return result, nil
+}
+
+func (s *Service) findCredential(ctx context.Context, credentialID string) (*RigPlan, ClearanceCredential, error) {
+	if s.credentialCacheID == credentialID && s.credentialCachePlan != nil {
+		return clonePlan(s.credentialCachePlan), s.credentialCacheValue, nil
+	}
+	p, credential, err := s.repo.FindCredential(ctx, credentialID)
+	if err != nil {
+		return nil, ClearanceCredential{}, err
+	}
+	s.credentialCacheID = credentialID
+	s.credentialCachePlan = clonePlan(p)
+	s.credentialCacheValue = credential
+	return p, credential, nil
 }
