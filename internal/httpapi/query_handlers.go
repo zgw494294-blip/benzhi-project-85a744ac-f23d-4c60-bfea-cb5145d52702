@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"stage-rig-clearance/internal/rigging"
@@ -12,7 +13,14 @@ func (s *Server) HandleTimeline(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"records": records, "verification": verification})
+	s.timelineBuffer.Reset()
+	if err := json.NewEncoder(&s.timelineBuffer).Encode(map[string]any{"records": records, "verification": verification}); err != nil {
+		writeProblem(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(s.timelineBuffer.Bytes())
 }
 
 func (s *Server) HandleVerifyCredential(w http.ResponseWriter, r *http.Request) {

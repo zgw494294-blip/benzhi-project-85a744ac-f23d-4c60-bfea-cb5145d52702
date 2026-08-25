@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"embed"
 	"net/http"
 
@@ -11,8 +12,9 @@ import (
 var webFiles embed.FS
 
 type Server struct {
-	service *rigging.Service
-	mux     *http.ServeMux
+	service        *rigging.Service
+	mux            *http.ServeMux
+	timelineBuffer bytes.Buffer
 }
 
 func New(service *rigging.Service) *Server {
