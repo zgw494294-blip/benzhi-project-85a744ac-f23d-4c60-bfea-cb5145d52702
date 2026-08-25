@@ -2,6 +2,7 @@ package rigging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,14 +11,24 @@ import (
 )
 
 type Service struct {
-	repo  Repository
-	audit Auditor
-	now   func() time.Time
-	mu    sync.Mutex
+	repo          Repository
+	audit         Auditor
+	now           func() time.Time
+	mu            sync.Mutex
+	timelineMu    sync.RWMutex
+	timelineCache map[string]timelineCacheEntry
+}
+
+type timelineCacheEntry struct {
+	records      []AuditRecord
+	verification Verification
 }
 
 func NewService(repo Repository, audit Auditor) *Service {
-	return &Service{repo: repo, audit: audit, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{
+		repo: repo, audit: audit, now: func() time.Time { return time.Now().UTC() },
+		timelineCache: make(map[string]timelineCacheEntry),
+	}
 }
 
 func (s *Service) GetPlan(ctx context.Context, id string) (*RigPlan, error) {
@@ -84,7 +95,27 @@ func (s *Service) Timeline(ctx context.Context, planID string) ([]AuditRecord, V
 	if _, err := s.repo.Get(ctx, planID); err != nil {
 		return nil, Verification{}, err
 	}
-	return s.audit.Timeline(ctx, planID)
+	s.timelineMu.RLock()
+	entry, ok := s.timelineCache[planID]
+	s.timelineMu.RUnlock()
+	if ok {
+		return cloneAuditRecords(entry.records), entry.verification, nil
+	}
+	records, verification, err := s.audit.Timeline(ctx, planID)
+	if err != nil {
+		return nil, Verification{}, err
+	}
+	s.timelineMu.Lock()
+	s.timelineCache[planID] = timelineCacheEntry{records: cloneAuditRecords(records), verification: verification}
+	s.timelineMu.Unlock()
+	return records, verification, nil
+}
+
+func cloneAuditRecords(records []AuditRecord) []AuditRecord {
+	b, _ := json.Marshal(records)
+	var result []AuditRecord
+	_ = json.Unmarshal(b, &result)
+	return result
 }
 
 func (s *Service) VerifyCredential(ctx context.Context, planID, credentialID string) (ClearanceCredential, Verification, error) {
