@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>舞台吊挂安全放行工作台</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">STAGE RIG CLEARANCE</p><h1>舞台吊挂安全放行工作台</h1></div>
+    <div id="connection" class="status-chip">就绪</div>
+  </header>
+  <main>
+    <aside class="sidebar">
+      <button id="new-plan" class="primary">新建吊挂方案</button>
+      <h2>方案列表</h2>
+      <div id="plan-list" class="plan-list"></div>
+    </aside>
+    <section class="workspace">
+      <section class="panel credential-lookup">
+        <div class="panel-head"><div><span class="step">00</span><h2>放行凭据直达核验</h2></div></div>
+        <form id="global-verify-form" class="inline-form">
+          <label>完整凭据标识<input name="credentialId" required placeholder="clearance-000001"></label>
+          <label class="grow">完整凭据摘要<input name="digest" minlength="64" maxlength="64" required placeholder="64 位 SHA-256 摘要"></label>
+          <button type="submit" class="accent">跨方案核验</button>
+        </form>
+        <div id="global-verify-result" hidden></div>
+      </section>
+      <div id="empty-state" class="empty-state">
+        <h2>从一份可追溯方案开始</h2>
+        <p>登记吊点与冗余，完成载荷试验、风险整改、终审冻结和放行凭据核验。</p>
+      </div>
+      <div id="plan-view" hidden>
+        <section class="summary-card">
+          <div><span class="label">当前方案</span><h2 id="plan-title"></h2><p id="plan-meta"></p><button id="edit-plan" class="ghost light">修订基础信息</button></div>
+          <div class="summary-numbers"><div><b id="plan-version">-</b><span>版本</span></div><div><b id="open-count">-</b><span>开放风险</span></div><div><b id="plan-status">-</b><span>状态</span></div></div>
+        </section>
+        <form id="plan-edit-form" class="form-grid" hidden>
+          <label>场地名称<input name="venueName" required></label>
+          <label>演出日期<input name="performanceDate" type="date" required></label>
+          <label>额定总载荷 kg<input name="ratedTotalLoadKg" type="number" min="0.01" step="0.01" required></label>
+          <label>方案负责人<input name="ownerName" required></label>
+          <div class="form-actions"><button type="submit" class="primary">保存修订</button><button type="button" class="ghost cancel" data-target="plan-edit-form">取消</button></div>
+        </form>
+        <nav class="steps" aria-label="业务阶段">
+          <a href="#points">1 吊点配置</a><a href="#tests">2 载荷试验</a><a href="#issues">3 风险整改</a><a href="#review">4 终审签发</a><a href="#audit">5 核验审计</a>
+        </nav>
+        <section id="points" class="panel">
+          <div class="panel-head"><div><span class="step">01</span><h2>吊点、设备与安全冗余</h2></div><button class="ghost toggle" data-target="point-form">登记吊点</button></div>
+          <form id="point-form" class="form-grid" hidden>
+            <label>吊点标签<input name="label" required placeholder="例如 L-A1"></label>
+            <label>额定载荷 kg<input name="ratedLoadKg" type="number" min="0.01" step="0.01" required></label>
+            <label>计划载荷 kg<input name="plannedLoadKg" type="number" min="0.01" step="0.01" required></label>
+            <label>设备型号<input name="deviceModel" required></label>
+            <label>钢索规格<input name="cableSpec" required></label>
+            <label>主吊点 ID（可选）<input name="primaryPointId"></label>
+            <label>冗余吊点<select name="redundantPointId"><option value="">暂未指定</option></select></label>
+            <label>证书到期日<input name="certificateExpiresOn" type="date" required></label>
+            <div class="form-actions"><button type="submit" class="primary"><span id="point-submit-label">保存吊点</span></button><button type="button" class="ghost cancel" data-target="point-form">取消</button></div>
+          </form>
+          <div id="point-list" class="data-list"></div>
+        </section>
+        <section id="tests" class="panel">
+          <div class="panel-head"><div><span class="step">02</span><h2>载荷试验与复测事实</h2></div><div><button id="open-batch" class="ghost">批量录入初试</button> <button class="ghost toggle" data-target="test-form">记录单条试验</button></div></div>
+          <form id="test-form" class="form-grid" hidden>
+            <label>吊点<select name="pointId" required></select></label>
+            <label>试验类型<select name="testKind"><option value="initial">初次试验</option><option value="retest">整改复测</option></select></label>
+            <label>待复测任务<select name="retestTaskId"><option value="">初试无需选择</option></select></label>
+            <label>目标载荷 kg<input name="targetLoadKg" type="number" min="0.01" step="0.01" required></label>
+            <label>实测载荷 kg<input name="measuredLoadKg" type="number" min="0.01" step="0.01" required></label>
+            <label>保持时长 秒<input name="holdSeconds" type="number" min="1" required value="60"></label>
+            <label>变形量 mm<input name="deformationMm" type="number" min="0" step="0.01" required value="0.5"></label>
+            <label>试验结论<select name="outcome"><option value="pass">通过</option><option value="fail">失败</option></select></label>
+            <label>证据摘要<input name="evidenceDigest" required placeholder="照片/记录文件摘要"></label>
+            <label>试验员<input name="performedBy" required></label>
+            <div class="form-actions"><button type="submit" class="primary">提交试验</button><button type="button" class="ghost cancel" data-target="test-form">取消</button></div>
+          </form>
+          <form id="batch-test-form" hidden>
+            <p class="hint">当前配置摘要随每行提交；任一行失败时整批不会写入。</p>
+            <div id="batch-rows" class="batch-grid"></div>
+            <div class="form-actions"><button type="submit" class="primary">原子归档整批</button><button type="button" class="ghost cancel" data-target="batch-test-form">取消</button></div>
+          </form>
+          <div id="test-list" class="data-list"></div>
+        </section>
+        <section id="issues" class="panel">
+          <div class="panel-head"><div><span class="step">03</span><h2>阻断风险与整改闭环</h2></div></div>
+          <p class="hint">提交整改后，使用上方“整改复测”记录满足载荷、60 秒保持及变形限制的复测。</p>
+          <div id="issue-list" class="data-list"></div>
+          <h3>复测任务</h3><div id="task-list" class="data-list"></div>
+        </section>
+        <section id="review" class="panel">
+          <div class="panel-head"><div><span class="step">04</span><h2>终审冻结与凭据签发</h2></div></div>
+          <form id="review-form" class="inline-form">
+            <label>决定<select name="decision"><option value="approve">批准并冻结</option><option value="return">退回整改</option></select></label>
+            <label>安全负责人<input name="reviewer" required></label>
+            <label class="grow">终审说明<input name="note"></label>
+            <button type="submit" class="primary">提交终审</button>
+          </form>
+          <form id="credential-form" class="inline-form">
+            <label>签发人<input name="issuedBy" required></label><button type="submit" class="accent">签发不可变放行凭据</button>
+          </form>
+          <div id="credential-list" class="data-list"></div>
+        </section>
+        <section id="audit" class="panel">
+          <div class="panel-head"><div><span class="step">05</span><h2>完整审计时间线</h2></div><button id="refresh-audit" class="ghost">刷新并验链</button></div>
+          <div id="audit-verification"></div><div id="audit-list" class="timeline"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <dialog id="create-dialog">
+    <form id="create-form" class="dialog-form">
+      <div><span class="eyebrow">NEW RIG PLAN</span><h2>创建吊挂方案</h2></div>
+      <label>场地名称<input name="venueName" required></label>
+      <label>演出日期<input name="performanceDate" type="date" required></label>
+      <label>额定总载荷 kg<input name="ratedTotalLoadKg" type="number" min="0.01" step="0.01" required></label>
+      <label>方案负责人<input name="ownerName" required></label>
+      <div class="form-actions"><button type="submit" class="primary">创建方案</button><button type="button" id="close-dialog" class="ghost">取消</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
