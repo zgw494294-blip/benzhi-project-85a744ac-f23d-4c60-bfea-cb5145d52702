@@ -10,10 +10,18 @@ import (
 )
 
 type Service struct {
-	repo  Repository
-	audit Auditor
-	now   func() time.Time
-	mu    sync.Mutex
+	repo              Repository
+	audit             Auditor
+	now               func() time.Time
+	mu                sync.Mutex
+	verificationMu    sync.Mutex
+	verificationCalls map[string]*credentialVerificationCall
+}
+
+type credentialVerificationCall struct {
+	done   chan struct{}
+	result GlobalCredentialVerification
+	err    error
 }
 
 func NewService(repo Repository, audit Auditor) *Service {
@@ -118,6 +126,33 @@ func (s *Service) VerifyCredentialGlobally(ctx context.Context, credentialID, di
 			return GlobalCredentialVerification{}, Invalid("digest", "凭据摘要必须为完整的 64 位十六进制值")
 		}
 	}
+	verificationKey := credentialID + "\x00" + strings.ToLower(digest)
+	s.verificationMu.Lock()
+	if s.verificationCalls == nil {
+		s.verificationCalls = make(map[string]*credentialVerificationCall)
+	}
+	if call, ok := s.verificationCalls[verificationKey]; ok {
+		s.verificationMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return GlobalCredentialVerification{}, ctx.Err()
+		case <-call.done:
+			return call.result, call.err
+		}
+	}
+	call := &credentialVerificationCall{done: make(chan struct{})}
+	s.verificationCalls[verificationKey] = call
+	s.verificationMu.Unlock()
+
+	call.result, call.err = s.verifyCredentialGlobally(ctx, credentialID, digest)
+	s.verificationMu.Lock()
+	delete(s.verificationCalls, verificationKey)
+	close(call.done)
+	s.verificationMu.Unlock()
+	return call.result, call.err
+}
+
+func (s *Service) verifyCredentialGlobally(ctx context.Context, credentialID, digest string) (GlobalCredentialVerification, error) {
 	p, credential, err := s.repo.FindCredential(ctx, credentialID)
 	if err != nil {
 		return GlobalCredentialVerification{}, err
